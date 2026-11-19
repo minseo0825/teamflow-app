@@ -10,7 +10,7 @@ const getColor = () => DEFAULT_COLOR; // 모든 멤버 동일 색상
 const getMyColor = () => { try { return localStorage.getItem('tf_my_color') || 'var(--accent)'; } catch { return 'var(--accent)'; } };
 
 export default function Chat() {
-  const { user, rooms = [], sendMessage, subscribeRoom, toast, createRoom, sendInvite, updateProfileColor } = useApp();
+  const { user, rooms = [], sendMessage, subscribeRoom, toast, createRoom, sendInvite, updateProfileColor, subscribeUserStatus } = useApp();
   const [activeRoom, setActiveRoom] = useState('');
   const [messages, setMessages] = useState([]);
   const [roomMembers, setRoomMembers] = useState([]);
@@ -57,13 +57,17 @@ export default function Chat() {
         if (!m.uid) return;
         onSnapshot(doc(db, 'users', m.uid), userSnap => {
           if (userSnap.exists()) {
-            setUsersInfo(prev => ({ ...prev, [m.uid]: userSnap.data() }));
+            setUsersInfo(prev => ({ ...prev, [m.uid]: { ...prev[m.uid], ...userSnap.data() } }));
           }
+        });
+        // 온라인 상태 구독
+        const statusUnsub = subscribeUserStatus(m.uid, (status) => {
+          setUsersInfo(prev => ({ ...prev, [m.uid]: { ...prev[m.uid], status: status?.state || 'offline' } }));
         });
       });
     });
     return unsub;
-  }, [activeRoom]);
+  }, [activeRoom, subscribeUserStatus]);
 
   // uid로 색상 가져오기
   const getUserColor = (uid) => {
@@ -279,38 +283,46 @@ export default function Chat() {
             <div style={{ width: 36, height: 36, borderRadius: '50%', background: myColor, display: 'grid', placeItems: 'center', fontSize: 14, fontWeight: 700, color: '#fff' }}>
               {displayName?.[0]}
             </div>
+            <div style={{ position: 'absolute', bottom: 0, right: 0, width: 12, height: 12, borderRadius: '50%', background: 'var(--green)', border: '2px solid var(--white)' }} title="온라인" />
           </div>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               나 {displayName}
               {myMemberInfo?.isOwner && <span style={{ fontSize: 10, marginLeft: 4 }}>👑</span>}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text3)' }}>{user?.role}</div>
+            <div style={{ fontSize: 11, color: 'var(--green)', fontWeight: 500 }}>● 온라인</div>
           </div>
         </div>
 
         <div style={{ height: 1, background: 'var(--border)', margin: '4px 12px' }} />
 
         {/* 다른 멤버들 */}
-        {roomMembers.filter(m => m.uid !== user?.uid).map(member => (
-          <div key={member.uid}
-            onClick={() => setProfileModal(member)}
-            style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', borderRadius: 8, margin: '1px 6px', transition: 'background .12s' }}
-            onMouseEnter={e => e.currentTarget.style.background = 'var(--bg)'}
-            onMouseLeave={e => e.currentTarget.style.background = ''}>
-            <div style={{ position: 'relative', flexShrink: 0 }}>
-              <div style={{ width: 36, height: 36, borderRadius: '50%', background: getUserColor(member.uid), display: 'grid', placeItems: 'center', fontSize: 14, fontWeight: 700, color: '#fff' }}>
-                {member.name?.[0]}
+        {roomMembers.filter(m => m.uid !== user?.uid).map(member => {
+          const isOnline = usersInfo[member.uid]?.status === 'online';
+          return (
+            <div key={member.uid}
+              onClick={() => setProfileModal(member)}
+              style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', borderRadius: 8, margin: '1px 6px', transition: 'background .12s' }}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--bg)'}
+              onMouseLeave={e => e.currentTarget.style.background = ''}>
+              <div style={{ position: 'relative', flexShrink: 0 }}>
+                <div style={{ width: 36, height: 36, borderRadius: '50%', background: getUserColor(member.uid), display: 'grid', placeItems: 'center', fontSize: 14, fontWeight: 700, color: '#fff' }}>
+                  {member.name?.[0]}
+                </div>
+                <div style={{ position: 'absolute', bottom: 0, right: 0, width: 12, height: 12, borderRadius: '50%', background: isOnline ? 'var(--green)' : 'var(--text3)', border: '2px solid var(--white)' }} title={isOnline ? '온라인' : '오프라인'} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {member.name}
+                  {member.isOwner && <span style={{ fontSize: 10, marginLeft: 4 }}>👑</span>}
+                </div>
+                <div style={{ fontSize: 11, color: isOnline ? 'var(--green)' : 'var(--text3)', fontWeight: isOnline ? 500 : 400 }}>
+                  ● {isOnline ? '온라인' : '오프라인'}
+                </div>
               </div>
             </div>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {member.name}
-                {member.isOwner && <span style={{ fontSize: 10, marginLeft: 4 }}>👑</span>}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text3)' }}>{member.role}</div>
-            </div>
-          </div>
+          );
+        })}
         ))}
 
         {roomMembers.filter(m => m.uid !== user?.uid).length === 0 && (

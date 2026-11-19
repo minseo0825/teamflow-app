@@ -3,12 +3,360 @@ import { useApp } from '../context/AppContext';
 import Modal from '../components/Modal';
 
 const sL = s => ({ todo: '대기', progress: '진행중', review: '리뷰중', done: '완료' }[s] || s);
+const pL = p => ({ critical: '긴급', high: '높음', medium: '보통', low: '낮음' }[p] || p);
+
+// ─── PROJECT DETAIL ─────────────────────────────────────────────────────────
+export function ProjectDetail({ projectId, setPage, setProjectId, onUserClick }) {
+  const { projects, issues, updateProject, deleteProject, createIssue, updateIssue, deleteIssue, toast, user } = useApp();
+  const [editMode, setEditMode] = useState(false);
+  const [newIssueOpen, setNewIssueOpen] = useState(false);
+  const [detailIssue, setDetailIssue] = useState(null);
+  const [editForm, setEditForm] = useState({});
+
+  const project = projects.find(p => p.id === projectId);
+  const projectIssues = issues.filter(i => i.pid === projectId);
+  const totalIssues = projectIssues.length;
+  const doneIssues = projectIssues.filter(i => i.status === 'done').length;
+  const inProgressIssues = projectIssues.filter(i => i.status !== 'done').length;
+  const progress = totalIssues > 0 ? Math.round((doneIssues / totalIssues) * 100) : 0;
+
+  if (!project) {
+    return (
+      <div className="card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>프로젝트를 찾을 수 없습니다</div>
+        <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={() => setPage('projects')}>프로젝트 목록으로</button>
+      </div>
+    );
+  }
+
+  const startEdit = () => {
+    setEditForm({ name: project.name, desc: project.desc });
+    setEditMode(true);
+  };
+
+  const saveEdit = async () => {
+    if (!editForm.name?.trim()) { toast('프로젝트 이름을 입력하세요', 'e'); return; }
+    await updateProject(project.id, editForm);
+    setEditMode(false);
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm(`"${project.name}" 프로젝트를 삭제할까요?\n소속된 이슈는 삭제되지 않습니다.`)) return;
+    await deleteProject(project.id);
+    setPage('projects');
+  };
+
+  const handleNewIssue = async (data) => {
+    await createIssue({ ...data, pid: project.id });
+    setNewIssueOpen(false);
+    toast('이슈가 등록되었습니다', 's');
+  };
+
+  return (
+    <div>
+      {/* 뒤로가기 버튼 */}
+      <div style={{ marginBottom: 16 }}>
+        <button className="btn btn-ghost btn-sm" onClick={() => { setProjectId(null); setPage('projects'); }}>
+          ← 프로젝트 목록
+        </button>
+      </div>
+
+      {/* 프로젝트 정보 카드 */}
+      <div className="card mb16">
+        {editMode ? (
+          <>
+            <div className="fg">
+              <label className="fl">프로젝트 이름</label>
+              <input className="fi" value={editForm.name} onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))} />
+            </div>
+            <div className="fg">
+              <label className="fl">설명</label>
+              <textarea rows={2} value={editForm.desc} onChange={e => setEditForm(p => ({ ...p, desc: e.target.value }))} style={{ resize: 'none' }} />
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn btn-outline btn-sm" onClick={() => setEditMode(false)}>취소</button>
+              <button className="btn btn-primary btn-sm" onClick={saveEdit}>저장</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 12, height: 12, borderRadius: '50%', background: project.color, flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-.5px', marginBottom: 4 }}>
+                    {project.name}
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--text2)' }}>{project.desc}</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-outline btn-sm" onClick={startEdit}>수정</button>
+                <button className="btn btn-danger btn-sm" onClick={handleDelete}>삭제</button>
+              </div>
+            </div>
+
+            <div className="g4 mb16">
+              <div style={{ background: 'var(--bg)', padding: '12px 14px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 11.5, color: 'var(--text3)', fontWeight: 500, marginBottom: 4 }}>전체 이슈</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>{totalIssues}</div>
+              </div>
+              <div style={{ background: 'var(--blue-bg)', padding: '12px 14px', borderRadius: 'var(--r-sm)', border: '1px solid var(--blue-b)' }}>
+                <div style={{ fontSize: 11.5, color: 'var(--blue)', fontWeight: 500, marginBottom: 4 }}>진행 중</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--blue)' }}>{inProgressIssues}</div>
+              </div>
+              <div style={{ background: 'var(--green-bg)', padding: '12px 14px', borderRadius: 'var(--r-sm)', border: '1px solid var(--green-b)' }}>
+                <div style={{ fontSize: 11.5, color: 'var(--green)', fontWeight: 500, marginBottom: 4 }}>완료</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--green)' }}>{doneIssues}</div>
+              </div>
+              <div style={{ background: 'var(--accent-light)', padding: '12px 14px', borderRadius: 'var(--r-sm)', border: '1px solid var(--blue-b)' }}>
+                <div style={{ fontSize: 11.5, color: 'var(--accent)', fontWeight: 500, marginBottom: 4 }}>진행률</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--accent)' }}>{progress}%</div>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>프로젝트 진행률</span>
+                <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text2)' }}>{doneIssues}/{totalIssues} 완료</span>
+              </div>
+              <div className="prog">
+                <div className="prog-f" style={{ width: `${progress}%`, background: project.color }} />
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 이슈 목록 */}
+      <div className="card">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>프로젝트 이슈 ({projectIssues.length})</span>
+          <button className="btn btn-primary btn-sm" onClick={() => setNewIssueOpen(true)}>+ 새 이슈</button>
+        </div>
+
+        {projectIssues.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '30px 20px', color: 'var(--text3)', fontSize: 13 }}>
+            아직 이슈가 없습니다. 첫 이슈를 등록해보세요!
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {projectIssues.map(i => (
+              <div key={i.id} className="issue-row" style={{ cursor: 'pointer' }} onClick={() => setDetailIssue(i)}>
+                <div className={`pdot p-${i.priority}`} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="ir-title">
+                    {i.title}
+                    {i.dueDate && new Date(i.dueDate) < new Date() && i.status !== 'done' && (
+                      <span style={{ marginLeft: 8, padding: '2px 7px', background: 'var(--red-bg)', color: 'var(--red)', borderRadius: '3px', fontSize: '11px', fontWeight: 500 }}>기한 초과</span>
+                    )}
+                  </div>
+                  <div className="ir-meta">
+                    <span className={`badge b-${i.status}`}>{sL(i.status)}</span>
+                    <span className={`badge b-${i.priority}`}>{pL(i.priority)}</span>
+                    <span>{i.assignee} · {i.created}</span>
+                    {i.dueDate && <span>마감: {i.dueDate}</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 새 이슈 모달 */}
+      <Modal open={newIssueOpen} onClose={() => setNewIssueOpen(false)}>
+        <NewIssueModalInner onClose={() => setNewIssueOpen(false)} onCreate={handleNewIssue} />
+      </Modal>
+
+      {/* 이슈 상세 모달 */}
+      <Modal open={!!detailIssue} onClose={() => setDetailIssue(null)}>
+        {detailIssue && <IssueDetailModalInner issue={detailIssue} onClose={() => setDetailIssue(null)} updateIssue={updateIssue} deleteIssue={deleteIssue} toast={toast} />}
+      </Modal>
+    </div>
+  );
+}
+
+function NewIssueModalInner({ onClose, onCreate }) {
+  const { user, toast } = useApp();
+  const [f, setF] = useState({
+    title: '', desc: '', priority: 'medium', status: 'todo',
+    assignee: user?.name || '', tags: '', startDate: '', dueDate: ''
+  });
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+
+  const submit = async () => {
+    if (!f.title.trim()) { toast('이슈 제목을 입력하세요', 'e'); return; }
+    if (f.startDate && f.dueDate && f.startDate > f.dueDate) {
+      toast('시작일은 마감일보다 늦을 수 없습니다', 'e');
+      return;
+    }
+    await onCreate({
+      ...f,
+      tags: f.tags.split(',').map(t => t.trim()).filter(Boolean),
+      comments: [],
+      participantUids: [user.uid], // 생성자를 기본 참여자로 추가
+    });
+  };
+
+  return (
+    <>
+      <div className="modal-title">새 이슈</div>
+      <div className="fg">
+        <label className="fl">제목</label>
+        <input className="fi" value={f.title} onChange={e => set('title', e.target.value)} placeholder="이슈를 명확하게 설명하세요" />
+      </div>
+      <div className="fg">
+        <label className="fl">설명</label>
+        <textarea rows={3} value={f.desc} onChange={e => set('desc', e.target.value)} placeholder="재현 방법, 기대 동작 등을 작성하세요" />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 11, marginBottom: 14 }}>
+        <div>
+          <label className="fl">우선순위</label>
+          <select value={f.priority} onChange={e => set('priority', e.target.value)}>
+            <option value="critical">긴급</option>
+            <option value="high">높음</option>
+            <option value="medium">보통</option>
+            <option value="low">낮음</option>
+          </select>
+        </div>
+        <div>
+          <label className="fl">상태</label>
+          <select value={f.status} onChange={e => set('status', e.target.value)}>
+            <option value="todo">대기</option>
+            <option value="progress">진행중</option>
+            <option value="review">리뷰중</option>
+          </select>
+        </div>
+        <div>
+          <label className="fl">담당자</label>
+          <input className="fi" value={f.assignee} onChange={e => set('assignee', e.target.value)} />
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 11, marginBottom: 14 }}>
+        <div>
+          <label className="fl">시작일</label>
+          <input className="fi" type="date" value={f.startDate} onChange={e => set('startDate', e.target.value)} />
+        </div>
+        <div>
+          <label className="fl">마감일</label>
+          <input className="fi" type="date" value={f.dueDate} onChange={e => set('dueDate', e.target.value)} />
+        </div>
+      </div>
+      <div className="fg">
+        <label className="fl">태그 (쉼표 구분)</label>
+        <input className="fi" value={f.tags} onChange={e => set('tags', e.target.value)} placeholder="bug, frontend, urgent" />
+      </div>
+      <div className="modal-ft">
+        <button className="btn btn-outline" onClick={onClose}>취소</button>
+        <button className="btn btn-primary" onClick={submit}>등록</button>
+      </div>
+    </>
+  );
+}
+
+function IssueDetailModalInner({ issue, onClose, updateIssue, deleteIssue, toast }) {
+  const { user } = useApp();
+  const [comment, setComment] = useState('');
+  const [localIssue, setLocalIssue] = useState(issue);
+
+  const handleUpdate = async (field, val) => {
+    await updateIssue(issue.id, field, val);
+    setLocalIssue(prev => ({ ...prev, [field]: val }));
+  };
+
+  const addComment = async () => {
+    if (!comment.trim()) { toast('코멘트를 입력하세요', 'e'); return; }
+    const newComments = [...(localIssue.comments || []), {
+      author: user.name, time: '방금', txt: comment.trim()
+    }];
+    await updateIssue(issue.id, 'comments', newComments);
+    setLocalIssue(prev => ({ ...prev, comments: newComments }));
+    setComment('');
+    toast('코멘트가 등록되었습니다', 's');
+  };
+
+  return (
+    <>
+      <div style={{ fontSize: 11.5, color: 'var(--text3)', fontWeight: 500, marginBottom: 5 }}>#{localIssue.id?.slice(-6)}</div>
+      <div className="modal-title">{localIssue.title}</div>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div>
+          <div className="dl">상태</div>
+          <select value={localIssue.status} onChange={e => handleUpdate('status', e.target.value)} style={{ width: 105 }}>
+            <option value="todo">대기</option>
+            <option value="progress">진행중</option>
+            <option value="review">리뷰중</option>
+            <option value="done">완료</option>
+          </select>
+        </div>
+        <div>
+          <div className="dl">우선순위</div>
+          <select value={localIssue.priority} onChange={e => handleUpdate('priority', e.target.value)} style={{ width: 105 }}>
+            <option value="critical">긴급</option>
+            <option value="high">높음</option>
+            <option value="medium">보통</option>
+            <option value="low">낮음</option>
+          </select>
+        </div>
+        <div><div className="dl">담당자</div><div className="dv">{localIssue.assignee}</div></div>
+        <div><div className="dl">등록일</div><div className="dv">{localIssue.created}</div></div>
+        {localIssue.participantUids && localIssue.participantUids.length > 0 && (
+          <div><div className="dl">참여자</div><div className="dv">👥 {localIssue.participantUids.length}명</div></div>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div>
+          <div className="dl">시작일</div>
+          <input type="date" value={localIssue.startDate || ''} onChange={e => handleUpdate('startDate', e.target.value)} style={{ width: 150, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: '13px' }} />
+        </div>
+        <div>
+          <div className="dl">마감일</div>
+          <input type="date" value={localIssue.dueDate || ''} onChange={e => handleUpdate('dueDate', e.target.value)} style={{ width: 150, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: '13px' }} />
+        </div>
+        {localIssue.dueDate && new Date(localIssue.dueDate) < new Date() && localIssue.status !== 'done' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'var(--red-bg)', color: 'var(--red)', borderRadius: 'var(--r-sm)', fontSize: '12px', fontWeight: 500 }}>
+            ⚠️ 기한 초과
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize: 13.5, color: 'var(--text2)', lineHeight: 1.7, background: 'var(--bg)', padding: '13px 15px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', marginBottom: 12 }}>
+        {localIssue.desc}
+      </div>
+      {localIssue.tags?.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          {localIssue.tags.map(t => <span key={t} className="dtag">{t}</span>)}
+        </div>
+      )}
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>코멘트 ({localIssue.comments?.length || 0})</div>
+      {(localIssue.comments || []).map((c, i) => (
+        <div key={i} className="cmt">
+          <div className="av av-sm">{c.author[0]}</div>
+          <div className="cmt-bub">
+            <span className="cmt-author">{c.author}</span>
+            <span className="cmt-time">{c.time}</span>
+            <div className="cmt-txt">{c.txt}</div>
+          </div>
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        <textarea rows={2} value={comment} onChange={e => setComment(e.target.value)} placeholder="코멘트를 입력하세요..." />
+        <button className="btn btn-primary btn-sm" style={{ alignSelf: 'flex-end' }} onClick={addComment}>등록</button>
+      </div>
+      <div className="modal-ft">
+        <button className="btn btn-danger btn-sm" onClick={async () => { await deleteIssue(issue.id); onClose(); }}>이슈 삭제</button>
+        <button className="btn btn-outline" onClick={onClose}>닫기</button>
+      </div>
+    </>
+  );
+}
 
 // ─── PROJECTS ───────────────────────────────────────────────────────────────
-export function Projects() {
+export function Projects({ onProjectClick }) {
   const { projects, issues, toast, user, createProject, deleteProject } = useApp();
   const [modal, setModal] = useState(false);
-  const [f, setF] = useState({ name: '', desc: '', invite: '' });
+  const [f, setF] = useState({ name: '', desc: '' });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
   const create = async () => {
@@ -20,32 +368,39 @@ export function Projects() {
       color: colors[projects.length % colors.length],
       progress: 0,
       members: [user.name],
+      memberUids: [user.uid],
     });
     setModal(false);
-    setF({ name: '', desc: '', invite: '' });
+    setF({ name: '', desc: '' });
   };
 
   return (
     <div>
       <div className="g3">
-        {projects.map(p => (
-          <div key={p.id} className="pcard">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <div style={{ width: 9, height: 9, borderRadius: '50%', background: p.color }} />
-              <div className="pcard-name" style={{ flex: 1 }}>{p.name}</div>
-              <button className="btn btn-danger btn-xs" onClick={e => { e.stopPropagation(); if(window.confirm(`"${p.name}" 프로젝트를 삭제할까요?`)) deleteProject(p.id); }}>삭제</button>
+        {projects.map(p => {
+          const projectIssues = issues.filter(i => i.pid === p.id);
+          const totalIssues = projectIssues.length;
+          const doneIssues = projectIssues.filter(i => i.status === 'done').length;
+          const progress = totalIssues > 0 ? Math.round((doneIssues / totalIssues) * 100) : 0;
+          return (
+            <div key={p.id} className="pcard" onClick={() => onProjectClick?.(p.id)} style={{ cursor: 'pointer' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <div style={{ width: 9, height: 9, borderRadius: '50%', background: p.color }} />
+                <div className="pcard-name" style={{ flex: 1 }}>{p.name}</div>
+                <button className="btn btn-danger btn-xs" onClick={e => { e.stopPropagation(); if(window.confirm(`"${p.name}" 프로젝트를 삭제할까요?`)) deleteProject(p.id); }}>삭제</button>
+              </div>
+              <div className="pcard-desc">{p.desc}</div>
+              <div className="prog mb16"><div className="prog-f" style={{ width: `${progress}%`, background: p.color }} /></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
+                <span>진행률</span><span style={{ fontWeight: 500 }}>{progress}%</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div className="av-stack">{(p.members || []).slice(0, 4).map(m => <div key={m} className="av av-sm">{m[0]}</div>)}</div>
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>이슈 {totalIssues}개</span>
+              </div>
             </div>
-            <div className="pcard-desc">{p.desc}</div>
-            <div className="prog mb16"><div className="prog-f" style={{ width: `${p.progress}%`, background: p.color }} /></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
-              <span>진행률</span><span style={{ fontWeight: 500 }}>{p.progress}%</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div className="av-stack">{(p.members || []).slice(0, 4).map(m => <div key={m} className="av av-sm">{m[0]}</div>)}</div>
-              <span style={{ fontSize: 12, color: 'var(--text3)' }}>이슈 {issues.filter(i => i.pid === p.id).length}개</span>
-            </div>
-          </div>
-        ))}
+          );
+        })}
         <div className="pcard" style={{ borderStyle: 'dashed', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 200, background: 'transparent', boxShadow: 'none' }} onClick={() => setModal(true)}>
           <div style={{ width: 34, height: 34, border: '1.5px dashed var(--border2)', borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 20, color: 'var(--text3)' }}>+</div>
           <div style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 500 }}>새 프로젝트 추가</div>
@@ -55,7 +410,6 @@ export function Projects() {
         <div className="modal-title">새 프로젝트</div>
         <div className="fg"><label className="fl">프로젝트 이름</label><input className="fi" value={f.name} onChange={e => set('name', e.target.value)} placeholder="예: 서비스 리뉴얼" /></div>
         <div className="fg"><label className="fl">설명</label><textarea rows={2} value={f.desc} onChange={e => set('desc', e.target.value)} placeholder="프로젝트 목적을 간략히 입력하세요" style={{ resize: 'none' }} /></div>
-        <div className="fg"><label className="fl">팀원 초대 이메일</label><input className="fi" value={f.invite} onChange={e => set('invite', e.target.value)} placeholder="colleague@company.com" /></div>
         <div className="modal-ft">
           <button className="btn btn-outline" onClick={() => setModal(false)}>취소</button>
           <button className="btn btn-primary" onClick={create}>생성</button>
@@ -269,6 +623,7 @@ export function Stats() {
           {projects.map(p => {
             const pi = issues.filter(i => i.pid === p.id);
             const pd = pi.filter(i => i.status === 'done').length;
+            const progress = pi.length > 0 ? Math.round((pd / pi.length) * 100) : 0;
             return (
               <div key={p.id} style={{ marginBottom: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
@@ -277,7 +632,7 @@ export function Stats() {
                   </span>
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>{pd}/{pi.length} 완료</span>
                 </div>
-                <div className="prog"><div className="prog-f" style={{ width: `${p.progress}%`, background: p.color }} /></div>
+                <div className="prog"><div className="prog-f" style={{ width: `${progress}%`, background: p.color }} /></div>
               </div>
             );
           })}

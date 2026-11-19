@@ -1,14 +1,86 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import Modal from '../components/Modal';
+import { DndContext, closestCorners, PointerSensor, useSensor, useSensors, useDroppable } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 const sL = s => ({ todo: '대기', progress: '진행중', review: '리뷰중', done: '완료' }[s] || s);
 const pL = p => ({ critical: '긴급', high: '높음', medium: '보통', low: '낮음' }[p] || p);
 
-function IssueDetailModal({ issue, onClose }) {
-  const { user, toast, updateIssue, deleteIssue } = useApp();
+function KanbanCard({ issue, onClick }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: issue.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners} className="kcard" onClick={onClick}>
+      <div className="kct2">
+        {issue.title}
+        {issue.dueDate && new Date(issue.dueDate) < new Date() && issue.status !== 'done' && (
+          <span style={{ marginLeft: 6, padding: '2px 6px', background: 'var(--red-bg)', color: 'var(--red)', borderRadius: '3px', fontSize: '10px', fontWeight: 500 }}>기한초과</span>
+        )}
+      </div>
+      {issue.dueDate && (
+        <div style={{ fontSize: '11px', color: 'var(--text3)', marginTop: 4 }}>📅 {issue.dueDate}</div>
+      )}
+      <div className="kfoot">
+        <span className={`badge b-${issue.priority}`}>{pL(issue.priority)}</span>
+        <div className="av av-sm">{issue.assignee?.[0]}</div>
+      </div>
+    </div>
+  );
+}
+
+function DroppableColumn({ id, children }) {
+  const { setNodeRef } = useDroppable({ id });
+  return (
+    <div ref={setNodeRef} className="kbody" style={{ minHeight: '100px' }}>
+      {children}
+    </div>
+  );
+}
+
+function IssueDetailModal({ issue, onClose, onUserClick }) {
+  const { user, toast, updateIssue, deleteIssue, getAllUsers } = useApp();
+  const [participantDetails, setParticipantDetails] = React.useState([]);
+  const [showAddParticipant, setShowAddParticipant] = React.useState(false);
+  const [allUsers, setAllUsers] = React.useState([]);
+  const [searchTerm, setSearchTerm] = React.useState('');
   const [comment, setComment] = useState('');
   const [localIssue, setLocalIssue] = useState(issue);
+
+  React.useEffect(() => {
+    if (localIssue.participantUids) {
+      getAllUsers().then(users => {
+        const details = localIssue.participantUids.map(uid => users.find(u => u.uid === uid)).filter(Boolean);
+        setParticipantDetails(details);
+        if (allUsers.length === 0) {
+          setAllUsers(users);
+        }
+      });
+    }
+  }, [localIssue.participantUids, getAllUsers, allUsers.length]);
+
+  const addParticipant = async (member) => {
+    if (localIssue.participantUids?.includes(member.uid)) return;
+    const newUids = [...(localIssue.participantUids || []), member.uid];
+    await updateIssue(issue.id, 'participantUids', newUids);
+    setLocalIssue(prev => ({ ...prev, participantUids: newUids }));
+    toast(`${member.name}님을 참여자로 추가했습니다`, 's');
+  };
+
+  const removeParticipant = async (uid) => {
+    if (!window.confirm('이 참여자를 제거하시겠습니까?')) return;
+    const newUids = localIssue.participantUids?.filter(id => id !== uid) || [];
+    await updateIssue(issue.id, 'participantUids', newUids);
+    setLocalIssue(prev => ({ ...prev, participantUids: newUids }));
+    toast('참여자를 제거했습니다', 's');
+  };
 
   const handleUpdate = async (field, val) => {
     await updateIssue(issue.id, field, val);
@@ -52,6 +124,151 @@ function IssueDetailModal({ issue, onClose }) {
         <div><div className="dl">담당자</div><div className="dv">{localIssue.assignee}</div></div>
         <div><div className="dl">등록일</div><div className="dv">{localIssue.created}</div></div>
       </div>
+
+      {/* 참여자 관리 */}
+      <div style={{ marginBottom: 16, padding: '12px', background: 'var(--bg)', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>참여자 ({participantDetails.length}명)</div>
+          <button
+            className="btn btn-outline btn-xs"
+            onClick={() => setShowAddParticipant(!showAddParticipant)}
+          >
+            + 추가
+          </button>
+        </div>
+
+        {/* 참여자 목록 */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: showAddParticipant ? 8 : 0 }}>
+          {participantDetails.map((p) => (
+            <div
+              key={p.uid}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '4px 8px',
+                background: 'var(--accent-light)',
+                borderRadius: 'var(--r-sm)',
+                fontSize: 13
+              }}
+            >
+              {p.photoURL ? (
+                <img
+                  src={p.photoURL}
+                  alt={p.name}
+                  style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover', cursor: 'pointer' }}
+                  onClick={() => onUserClick && onUserClick(p.uid)}
+                />
+              ) : (
+                <div
+                  style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 600, cursor: 'pointer' }}
+                  onClick={() => onUserClick && onUserClick(p.uid)}
+                >
+                  {p.name[0]}
+                </div>
+              )}
+              <span style={{ cursor: 'pointer' }} onClick={() => onUserClick && onUserClick(p.uid)}>{p.name}</span>
+              <button
+                type="button"
+                onClick={() => removeParticipant(p.uid)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                  marginLeft: 2,
+                  color: 'var(--text3)',
+                  fontSize: 14,
+                  lineHeight: 1
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* 참여자 추가 모달 */}
+        {showAddParticipant && (
+          <div style={{
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--r-sm)',
+            padding: 12,
+            background: 'var(--white)',
+            maxHeight: 250,
+            overflowY: 'auto'
+          }}>
+            <input
+              type="text"
+              className="fi"
+              placeholder="이름, 이메일, 부서로 검색..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              style={{ marginBottom: 8, width: '100%' }}
+            />
+            {allUsers
+              .filter(u =>
+                !localIssue.participantUids?.includes(u.uid) &&
+                (u.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                u.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                u.department?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                u.team?.toLowerCase().includes(searchTerm.toLowerCase()))
+              )
+              .map(member => (
+                <div
+                  key={member.uid}
+                  onClick={() => { addParticipant(member); setShowAddParticipant(false); }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                    borderRadius: 'var(--r-sm)',
+                    background: 'transparent',
+                    marginBottom: 4
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--accent-light)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
+                  {member.photoURL ? (
+                    <img src={member.photoURL} alt={member.name} style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover' }} />
+                  ) : (
+                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 600 }}>
+                      {member.name?.[0]}
+                    </div>
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>{member.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                      {member.department || member.team || member.role} · {member.email}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            {allUsers.filter(u => !localIssue.participantUids?.includes(u.uid)).length === 0 && (
+              <div style={{ fontSize: 13, color: 'var(--text3)', textAlign: 'center', padding: '16px 0' }}>
+                추가할 수 있는 사용자가 없습니다
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div>
+          <div className="dl">시작일</div>
+          <input type="date" value={localIssue.startDate || ''} onChange={e => handleUpdate('startDate', e.target.value)} style={{ width: 150, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: '13px' }} />
+        </div>
+        <div>
+          <div className="dl">마감일</div>
+          <input type="date" value={localIssue.dueDate || ''} onChange={e => handleUpdate('dueDate', e.target.value)} style={{ width: 150, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: '13px' }} />
+        </div>
+        {localIssue.dueDate && new Date(localIssue.dueDate) < new Date() && localIssue.status !== 'done' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'var(--red-bg)', color: 'var(--red)', borderRadius: 'var(--r-sm)', fontSize: '12px', fontWeight: 500 }}>
+            ⚠️ 기한 초과
+          </div>
+        )}
+      </div>
       <div style={{ fontSize: 13.5, color: 'var(--text2)', lineHeight: 1.7, background: 'var(--bg)', padding: '13px 15px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', marginBottom: 12 }}>
         {localIssue.desc}
       </div>
@@ -84,21 +301,50 @@ function IssueDetailModal({ issue, onClose }) {
 }
 
 function NewIssueModal({ onClose, projects, defaultStatus = 'todo' }) {
-  const { user, createIssue } = useApp();
+  const { user, createIssue, getAllUsers, toast } = useApp();
   const [f, setF] = useState({
-    pid: projects[0]?.id || '', title: '', desc: '',
+    pid: projects.length > 0 ? projects[0].id : '', title: '', desc: '',
     priority: 'medium', status: defaultStatus,
-    assignee: user?.name || '', tags: ''
+    assignee: user?.name || '', tags: '',
+    startDate: '', dueDate: ''
   });
-  const { toast } = useApp();
+  const [participants, setParticipants] = useState([user]);
+  const [showParticipantSelect, setShowParticipantSelect] = useState(false);
+  const [allUsers, setAllUsers] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+
+  React.useEffect(() => {
+    if (showParticipantSelect && allUsers.length === 0) {
+      getAllUsers().then(users => setAllUsers(users));
+    }
+  }, [showParticipantSelect, allUsers.length, getAllUsers]);
+
+  const toggleParticipant = (member) => {
+    if (member.uid === user.uid) return;
+    if (participants.find(p => p.uid === member.uid)) {
+      setParticipants(participants.filter(p => p.uid !== member.uid));
+    } else {
+      setParticipants([...participants, member]);
+    }
+  };
+
+  const removeParticipant = (uid) => {
+    if (uid === user.uid) return;
+    setParticipants(participants.filter(p => p.uid !== uid));
+  };
 
   const submit = async () => {
     if (!f.title.trim()) { toast('이슈 제목을 입력하세요', 'e'); return; }
+    if (f.startDate && f.dueDate && f.startDate > f.dueDate) {
+      toast('시작일은 마감일보다 늦을 수 없습니다', 'e');
+      return;
+    }
     await createIssue({
       ...f,
       tags: f.tags.split(',').map(t => t.trim()).filter(Boolean),
       comments: [],
+      participantUids: participants.map(p => p.uid),
     });
     onClose();
   };
@@ -109,6 +355,7 @@ function NewIssueModal({ onClose, projects, defaultStatus = 'todo' }) {
       <div className="fg">
         <label className="fl">프로젝트</label>
         <select value={f.pid} onChange={e => set('pid', e.target.value)}>
+          <option value="">미지정</option>
           {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </div>
@@ -143,10 +390,151 @@ function NewIssueModal({ onClose, projects, defaultStatus = 'todo' }) {
           <input className="fi" value={f.assignee} onChange={e => set('assignee', e.target.value)} />
         </div>
       </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 11, marginBottom: 14 }}>
+        <div>
+          <label className="fl">시작일</label>
+          <input className="fi" type="date" value={f.startDate} onChange={e => set('startDate', e.target.value)} />
+        </div>
+        <div>
+          <label className="fl">마감일</label>
+          <input className="fi" type="date" value={f.dueDate} onChange={e => set('dueDate', e.target.value)} />
+        </div>
+      </div>
       <div className="fg">
         <label className="fl">태그 (쉼표 구분)</label>
         <input className="fi" value={f.tags} onChange={e => set('tags', e.target.value)} placeholder="bug, frontend, urgent" />
       </div>
+
+      {/* 참여자 선택 */}
+      <div className="fg">
+        <label className="fl">참여자 ({participants.length}명)</label>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={() => setShowParticipantSelect(!showParticipantSelect)}
+          style={{ marginBottom: 8 }}
+        >
+          👥 참여자 추가
+        </button>
+
+        {/* 선택된 참여자 목록 */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+          {participants.map(p => (
+            <div
+              key={p.uid}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '4px 8px',
+                background: 'var(--accent-light)',
+                borderRadius: 'var(--r-sm)',
+                fontSize: 13
+              }}
+            >
+              {p.photoURL ? (
+                <img src={p.photoURL} alt={p.name} style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover' }} />
+              ) : (
+                <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 600 }}>
+                  {p.name?.[0]}
+                </div>
+              )}
+              <span>{p.name}</span>
+              {p.uid !== user.uid && (
+                <button
+                  type="button"
+                  onClick={() => removeParticipant(p.uid)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                    marginLeft: 2,
+                    color: 'var(--text3)',
+                    fontSize: 14,
+                    lineHeight: 1
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* 사용자 선택 모달 */}
+        {showParticipantSelect && (
+          <div style={{
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--r-sm)',
+            padding: 12,
+            background: 'var(--bg)',
+            maxHeight: 300,
+            overflowY: 'auto'
+          }}>
+            <input
+              type="text"
+              className="fi"
+              placeholder="이름, 이메일, 부서로 검색..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              style={{ marginBottom: 8, width: '100%' }}
+            />
+            {allUsers
+              .filter(u =>
+                u.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                u.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                u.department?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                u.team?.toLowerCase().includes(searchTerm.toLowerCase())
+              )
+              .map(member => {
+                const isSelected = participants.find(p => p.uid === member.uid);
+                const isCurrentUser = member.uid === user.uid;
+                return (
+                  <div
+                    key={member.uid}
+                    onClick={() => !isCurrentUser && toggleParticipant(member)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '8px 12px',
+                      cursor: isCurrentUser ? 'default' : 'pointer',
+                      borderRadius: 'var(--r-sm)',
+                      background: isSelected ? 'var(--accent-light)' : 'transparent',
+                      marginBottom: 4,
+                      opacity: isCurrentUser ? 0.6 : 1
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!isSelected}
+                      disabled={isCurrentUser}
+                      onChange={() => {}}
+                      style={{ cursor: isCurrentUser ? 'default' : 'pointer' }}
+                    />
+                    {member.photoURL ? (
+                      <img src={member.photoURL} alt={member.name} style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover' }} />
+                    ) : (
+                      <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 600 }}>
+                        {member.name?.[0]}
+                      </div>
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>
+                        {member.name} {isCurrentUser && '(나)'}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                        {member.department || member.team || member.role} · {member.email}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        )}
+      </div>
+
       <div className="modal-ft">
         <button className="btn btn-outline" onClick={onClose}>취소</button>
         <button className="btn btn-primary" onClick={submit}>등록</button>
@@ -155,17 +543,28 @@ function NewIssueModal({ onClose, projects, defaultStatus = 'todo' }) {
   );
 }
 
-export default function Issues({ filter = { status: 'all', priority: 'all', project: 'all', search: '' } }) {
+export default function Issues({ filter = { status: 'all', priority: 'all', project: 'all', search: '' }, onUserClick }) {
   const { issues, projects, updateIssue, deleteIssue } = useApp();
   const [localFilter, setLocalFilter] = useState(filter);
   const [view, setView] = useState('list');
   const [modal, setModal] = useState(null);
   const [newStatus, setNewStatus] = useState('todo');
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    })
+  );
+
   const lf = (k, v) => setLocalFilter(p => ({ ...p, [k]: v }));
 
   const filtered = issues.filter(i => {
-    if (localFilter.project !== 'all' && i.pid !== localFilter.project) return false;
+    if (localFilter.project !== 'all') {
+      if (localFilter.project === 'none' && i.pid) return false;
+      if (localFilter.project !== 'none' && i.pid !== localFilter.project) return false;
+    }
     if (localFilter.status !== 'all' && i.status !== localFilter.status) return false;
     if (localFilter.priority !== 'all' && i.priority !== localFilter.priority) return false;
     if (localFilter.search && !i.title.toLowerCase().includes(localFilter.search.toLowerCase())) return false;
@@ -177,6 +576,19 @@ export default function Issues({ filter = { status: 'all', priority: 'all', proj
     await updateIssue(id, 'status', cycle[currentStatus]);
   };
 
+  const handleDragEnd = async (event) => {
+    const { active, over } = event;
+    if (!over) return;
+
+    const issueId = active.id;
+    const newStatus = over.id;
+
+    const issue = issues.find(i => i.id === issueId);
+    if (issue && issue.status !== newStatus) {
+      await updateIssue(issueId, 'status', newStatus);
+    }
+  };
+
   return (
     <div>
       {/* Filter bar */}
@@ -184,6 +596,7 @@ export default function Issues({ filter = { status: 'all', priority: 'all', proj
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <select style={{ width: 140 }} value={localFilter.project} onChange={e => lf('project', e.target.value)}>
             <option value="all">전체 프로젝트</option>
+            <option value="none">미지정</option>
             {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           <select style={{ width: 110 }} value={localFilter.status} onChange={e => lf('status', e.target.value)}>
@@ -217,36 +630,34 @@ export default function Issues({ filter = { status: 'all', priority: 'all', proj
       </div>
 
       {view === 'kanban' ? (
-        <div className="kanban">
-          {[
-            { k: 'todo', l: '대기', c: 'var(--text3)' },
-            { k: 'progress', l: '진행중', c: 'var(--blue)' },
-            { k: 'review', l: '리뷰중', c: 'var(--purple)' },
-            { k: 'done', l: '완료', c: 'var(--green)' }
-          ].map(col => {
-            const ci = filtered.filter(i => i.status === col.k);
-            return (
-              <div key={col.k} className="kcol">
-                <div className="kch">
-                  <div className="kct"><div className="pdot" style={{ background: col.c }} />{col.l}</div>
-                  <span className="kcount">{ci.length}</span>
+        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
+          <div className="kanban">
+            {[
+              { k: 'todo', l: '대기', c: 'var(--text3)' },
+              { k: 'progress', l: '진행중', c: 'var(--blue)' },
+              { k: 'review', l: '리뷰중', c: 'var(--purple)' },
+              { k: 'done', l: '완료', c: 'var(--green)' }
+            ].map(col => {
+              const ci = filtered.filter(i => i.status === col.k);
+              return (
+                <div key={col.k} className="kcol">
+                  <div className="kch">
+                    <div className="kct"><div className="pdot" style={{ background: col.c }} />{col.l}</div>
+                    <span className="kcount">{ci.length}</span>
+                  </div>
+                  <SortableContext items={ci.map(i => i.id)} strategy={verticalListSortingStrategy}>
+                    <DroppableColumn id={col.k}>
+                      {ci.map(i => (
+                        <KanbanCard key={i.id} issue={i} onClick={() => setModal({ type: 'detail', data: i })} />
+                      ))}
+                      <button className="kadd" onClick={() => { setNewStatus(col.k); setModal({ type: 'new' }); }}>+ 이슈 추가</button>
+                    </DroppableColumn>
+                  </SortableContext>
                 </div>
-                <div className="kbody">
-                  {ci.map(i => (
-                    <div key={i.id} className="kcard" onClick={() => setModal({ type: 'detail', data: i })}>
-                      <div className="kct2">{i.title}</div>
-                      <div className="kfoot">
-                        <span className={`badge b-${i.priority}`}>{pL(i.priority)}</span>
-                        <div className="av av-sm">{i.assignee?.[0]}</div>
-                      </div>
-                    </div>
-                  ))}
-                  <button className="kadd" onClick={() => { setNewStatus(col.k); setModal({ type: 'new' }); }}>+ 이슈 추가</button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </DndContext>
       ) : (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           {!filtered.length ? (
@@ -261,16 +672,39 @@ export default function Issues({ filter = { status: 'all', priority: 'all', proj
                 onClick={() => setModal({ type: 'detail', data: i })}>
                 <div className={`pdot p-${i.priority}`} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="ir-title">{i.title}</div>
+                  <div className="ir-title">
+                    {i.title}
+                    {i.dueDate && new Date(i.dueDate) < new Date() && i.status !== 'done' && (
+                      <span style={{ marginLeft: 8, padding: '2px 7px', background: 'var(--red-bg)', color: 'var(--red)', borderRadius: '3px', fontSize: '11px', fontWeight: 500 }}>기한 초과</span>
+                    )}
+                  </div>
                   <div className="ir-meta">
                     <span className={`badge b-${i.status}`}>{sL(i.status)}</span>
                     <span className={`badge b-${i.priority}`}>{pL(i.priority)}</span>
                     {proj && <span>{proj.name}</span>}
                     <span>{i.assignee} · {i.created}</span>
+                    {i.dueDate && <span>마감: {i.dueDate}</span>}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-                  <button className="btn btn-outline btn-xs" onClick={() => cycleStatus(i.id, i.status)}>상태 변경</button>
+                  <select
+                    value={i.status}
+                    onChange={e => updateIssue(i.id, 'status', e.target.value)}
+                    style={{
+                      padding: '4px 9px',
+                      fontSize: '12px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--r-sm)',
+                      background: 'var(--white)',
+                      color: 'var(--text2)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="todo">대기</option>
+                    <option value="progress">진행중</option>
+                    <option value="review">리뷰중</option>
+                    <option value="done">완료</option>
+                  </select>
                   <button className="btn btn-danger btn-xs" onClick={() => deleteIssue(i.id)}>삭제</button>
                 </div>
               </div>
@@ -284,6 +718,7 @@ export default function Issues({ filter = { status: 'all', priority: 'all', proj
           <IssueDetailModal
             issue={modal.data}
             onClose={() => setModal(null)}
+            onUserClick={onUserClick}
           />
         )}
         {modal?.type === 'new' && (

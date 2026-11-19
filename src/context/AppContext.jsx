@@ -9,7 +9,7 @@ import {
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
   onSnapshot, query, where, orderBy,
-  serverTimestamp, setDoc, getDoc,
+  serverTimestamp, setDoc, getDoc, getDocs,
 } from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
 
@@ -24,7 +24,7 @@ export function AppProvider({ children }) {
   const [issues, setIssues]           = useState([]);
   const [meetings, setMeetings]       = useState([]);
   const [notifs, setNotifs]           = useState([]);
-  const [invites, setInvites]         = useState([]); // 초대 알림
+  const [invites, setInvites]         = useState([]); // 채팅 초대 (기존 기능)
   const [rooms, setRooms]             = useState(DEFAULT_ROOMS);
   const [toasts, setToasts]           = useState([]);
 
@@ -91,11 +91,17 @@ export function AppProvider({ children }) {
         }, () => {}
       ),
 
-      // 내 이메일로 온 초대 구독
+      // 채팅 초대 구독 (기존 기능)
       onSnapshot(
         query(collection(db, 'invites'), where('toEmail', '==', user.email), where('status', '==', 'pending')),
-        s => setInvites(s.docs.map(d => ({ id: d.id, ...d.data() }))),
-        () => {}
+        s => {
+          // type이 'project'나 'issue'가 아닌 채팅 초대만 필터링
+          const chatInvites = s.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(inv => inv.type !== 'project' && inv.type !== 'issue');
+          setInvites(chatInvites);
+        },
+        (err) => console.error('초대 구독 에러:', err)
       ),
 
       onSnapshot(
@@ -115,6 +121,18 @@ export function AppProvider({ children }) {
       setUser(prev => ({ ...prev, profileColor: color }));
     } catch { }
   }, [user]);
+
+  // ── 프로필 업데이트 ──────────────────────────────────
+  const updateProfile = useCallback(async (updates) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, 'users', user.uid), updates);
+      setUser(prev => ({ ...prev, ...updates }));
+      toast('프로필이 업데이트되었습니다', 's');
+    } catch {
+      toast('프로필 업데이트에 실패했습니다', 'e');
+    }
+  }, [user, toast]);
 
   const login = useCallback(async (email, password) => {
     try {
@@ -224,9 +242,13 @@ export function AppProvider({ children }) {
   // ── 프로젝트 CRUD ────────────────────────────────────
   const createProject = useCallback(async (data) => {
     try {
-      await addDoc(collection(db, 'projects'), { ...data, createdBy: user.uid, createdAt: serverTimestamp() });
+      const docRef = await addDoc(collection(db, 'projects'), { ...data, createdBy: user.uid, createdAt: serverTimestamp() });
       toast(`"${data.name}" 프로젝트가 생성되었습니다`, 's');
-    } catch { toast('프로젝트 생성에 실패했습니다', 'e'); }
+      return docRef.id;
+    } catch {
+      toast('프로젝트 생성에 실패했습니다', 'e');
+      return null;
+    }
   }, [user, toast]);
 
   const updateProject = useCallback(async (id, data) => {
@@ -301,6 +323,17 @@ export function AppProvider({ children }) {
     return onSnapshot(q, s => callback(s.docs.map(d => ({ id: d.id, ...d.data() }))));
   }, []);
 
+  // ── 사용자 목록 조회 (내부 함수, 11-15번 UI는 제거됨) ──
+  const getAllUsers = useCallback(async () => {
+    try {
+      const usersSnapshot = await getDocs(collection(db, 'users'));
+      return usersSnapshot.docs.map(d => ({ uid: d.id, ...d.data() }));
+    } catch (e) {
+      console.error('사용자 목록 불러오기 실패:', e);
+      return [];
+    }
+  }, []);
+
   const openIssueCount = issues.filter(i => i.status !== 'done').length;
 
   return (
@@ -313,11 +346,13 @@ export function AppProvider({ children }) {
       toasts, toast, addNotif,
       openIssueCount,
       updateProfileColor,
+      updateProfile,
       createProject, updateProject, deleteProject,
       createIssue, updateIssue, deleteIssue,
       createMeeting, updateMeeting, deleteMeeting,
       createRoom,
       sendMessage, subscribeRoom,
+      getAllUsers,
     }}>
       {children}
     </AppContext.Provider>

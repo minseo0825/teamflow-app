@@ -82,20 +82,26 @@ export default function Dashboard({ setPage, setIssueFilter }) {
           </div>
           {projects.length === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--text3)', textAlign: 'center', padding: '20px 0' }}>프로젝트가 없습니다</div>
-          ) : projects.map(p => (
-            <div key={p.id} style={{ marginBottom: 18 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: p.color }} />
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>{p.name}</span>
+          ) : projects.map(p => {
+            const projectIssues = issues.filter(i => i.pid === p.id);
+            const totalIssues = projectIssues.length;
+            const doneIssues = projectIssues.filter(i => i.status === 'done').length;
+            const progress = totalIssues > 0 ? Math.round((doneIssues / totalIssues) * 100) : 0;
+            return (
+              <div key={p.id} style={{ marginBottom: 18 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: p.color }} />
+                    <span style={{ fontSize: 13, fontWeight: 500 }}>{p.name}</span>
+                  </div>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 500 }}>{progress}%</span>
                 </div>
-                <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 500 }}>{p.progress}%</span>
+                <div className="prog">
+                  <div className="prog-f" style={{ width: `${progress}%`, background: p.color }} />
+                </div>
               </div>
-              <div className="prog">
-                <div className="prog-f" style={{ width: `${p.progress}%`, background: p.color }} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
