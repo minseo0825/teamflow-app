@@ -1,6 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import Modal from '../components/Modal';
+import ProjectVisibilityField, { buildVisibilityFields, projectInvitees, VisibilityBadge } from '../components/ProjectVisibilityField';
+import { InviteStatusBadge, RejectedInvites } from '../components/MemberPicker';
+import { MyInviteBar, LeaveButton, ReinviteButton } from '../components/InviteActions';
+import { requestReviewFromBackend, reviewErrorMessage } from '../lib/aiReview';
+import { saveCodeReview, subscribeMyCodeReviews, deleteCodeReview, toReview } from '../lib/reviewHistory';
 
 const sL = s => ({ todo: '대기', progress: '진행중', review: '리뷰중', done: '완료' }[s] || s);
 const pL = p => ({ critical: '긴급', high: '높음', medium: '보통', low: '낮음' }[p] || p);
@@ -28,6 +33,9 @@ export function ProjectDetail({ projectId, setPage, setProjectId, onUserClick })
       </div>
     );
   }
+
+  // 기존 프로젝트(createdBy만 있음) 포함, 생성자만 수정/삭제 가능
+  const isOwner = project.createdBy === user?.uid;
 
   const startEdit = () => {
     setEditForm({ name: project.name, desc: project.desc });
@@ -81,20 +89,42 @@ export function ProjectDetail({ projectId, setPage, setProjectId, onUserClick })
           </>
         ) : (
           <>
+            <MyInviteBar type="project" item={project} onRejected={() => { setProjectId(null); setPage('projects'); }} />
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <div style={{ width: 12, height: 12, borderRadius: '50%', background: project.color, flexShrink: 0 }} />
                 <div>
-                  <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-.5px', marginBottom: 4 }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-.5px', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
                     {project.name}
+                    <VisibilityBadge visibility={project.visibility} />
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--text2)' }}>{project.desc}</div>
+                  {project.visibility === 'team' && (project.memberUids || []).length > 0 && (
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>
+                      참여 팀원:{' '}
+                      {project.memberUids.map((uid, idx) => {
+                        const st = project.inviteStatus?.[uid];
+                        return (
+                          <span key={uid} style={{ marginRight: 8, whiteSpace: 'nowrap' }}>
+                            {st?.name || project.members?.[idx] || ''}
+                            <InviteStatusBadge status={st?.status} />
+                          </span>
+                        );
+                      })}
+                      <RejectedInvites inviteStatus={project.inviteStatus} />
+                      <ReinviteButton type="project" item={project} />
+                    </div>
+                  )}
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-outline btn-sm" onClick={startEdit}>수정</button>
-                <button className="btn btn-danger btn-sm" onClick={handleDelete}>삭제</button>
-              </div>
+              {isOwner ? (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-outline btn-sm" onClick={startEdit}>수정</button>
+                  <button className="btn btn-danger btn-sm" onClick={handleDelete}>삭제</button>
+                </div>
+              ) : (
+                <LeaveButton type="project" item={project} onLeft={() => { setProjectId(null); setPage('projects'); }} />
+              )}
             </div>
 
             <div className="g4 mb16">
@@ -257,9 +287,10 @@ function NewIssueModalInner({ onClose, onCreate }) {
 }
 
 function IssueDetailModalInner({ issue, onClose, updateIssue, deleteIssue, toast }) {
-  const { user } = useApp();
+  const { user, issues } = useApp();
   const [comment, setComment] = useState('');
   const [localIssue, setLocalIssue] = useState(issue);
+  const liveIssue = issues.find(i => i.id === issue.id) || localIssue; // 초대 응답/나가기 상태는 실시간 기준
 
   const handleUpdate = async (field, val) => {
     await updateIssue(issue.id, field, val);
@@ -279,6 +310,7 @@ function IssueDetailModalInner({ issue, onClose, updateIssue, deleteIssue, toast
 
   return (
     <>
+      <MyInviteBar type="issue" item={liveIssue} onRejected={onClose} />
       <div style={{ fontSize: 11.5, color: 'var(--text3)', fontWeight: 500, marginBottom: 5 }}>#{localIssue.id?.slice(-6)}</div>
       <div className="modal-title">{localIssue.title}</div>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -345,7 +377,10 @@ function IssueDetailModalInner({ issue, onClose, updateIssue, deleteIssue, toast
         <button className="btn btn-primary btn-sm" style={{ alignSelf: 'flex-end' }} onClick={addComment}>등록</button>
       </div>
       <div className="modal-ft">
-        <button className="btn btn-danger btn-sm" onClick={async () => { await deleteIssue(issue.id); onClose(); }}>이슈 삭제</button>
+        {liveIssue.createdBy === user?.uid && (
+          <button className="btn btn-danger btn-sm" onClick={async () => { await deleteIssue(issue.id); onClose(); }}>이슈 삭제</button>
+        )}
+        <LeaveButton type="issue" item={liveIssue} onLeft={onClose} />
         <button className="btn btn-outline" onClick={onClose}>닫기</button>
       </div>
     </>
@@ -357,6 +392,8 @@ export function Projects({ onProjectClick }) {
   const { projects, issues, toast, user, createProject, deleteProject } = useApp();
   const [modal, setModal] = useState(false);
   const [f, setF] = useState({ name: '', desc: '' });
+  const [visibility, setVisibility] = useState('private');
+  const [members, setMembers] = useState([]);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
   const create = async () => {
@@ -367,11 +404,12 @@ export function Projects({ onProjectClick }) {
       desc: f.desc || '새 프로젝트',
       color: colors[projects.length % colors.length],
       progress: 0,
-      members: [user.name],
-      memberUids: [user.uid],
-    });
+      ...buildVisibilityFields(user, visibility, members),
+    }, projectInvitees(visibility, members));
     setModal(false);
     setF({ name: '', desc: '' });
+    setVisibility('private');
+    setMembers([]);
   };
 
   return (
@@ -387,7 +425,10 @@ export function Projects({ onProjectClick }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <div style={{ width: 9, height: 9, borderRadius: '50%', background: p.color }} />
                 <div className="pcard-name" style={{ flex: 1 }}>{p.name}</div>
-                <button className="btn btn-danger btn-xs" onClick={e => { e.stopPropagation(); if(window.confirm(`"${p.name}" 프로젝트를 삭제할까요?`)) deleteProject(p.id); }}>삭제</button>
+                <VisibilityBadge visibility={p.visibility} />
+                {p.createdBy === user.uid && (
+                  <button className="btn btn-danger btn-xs" onClick={e => { e.stopPropagation(); if(window.confirm(`"${p.name}" 프로젝트를 삭제할까요?`)) deleteProject(p.id); }}>삭제</button>
+                )}
               </div>
               <div className="pcard-desc">{p.desc}</div>
               <div className="prog mb16"><div className="prog-f" style={{ width: `${progress}%`, background: p.color }} /></div>
@@ -410,6 +451,7 @@ export function Projects({ onProjectClick }) {
         <div className="modal-title">새 프로젝트</div>
         <div className="fg"><label className="fl">프로젝트 이름</label><input className="fi" value={f.name} onChange={e => set('name', e.target.value)} placeholder="예: 서비스 리뉴얼" /></div>
         <div className="fg"><label className="fl">설명</label><textarea rows={2} value={f.desc} onChange={e => set('desc', e.target.value)} placeholder="프로젝트 목적을 간략히 입력하세요" style={{ resize: 'none' }} /></div>
+        <ProjectVisibilityField visibility={visibility} onVisibilityChange={setVisibility} members={members} onMembersChange={setMembers} />
         <div className="modal-ft">
           <button className="btn btn-outline" onClick={() => setModal(false)}>취소</button>
           <button className="btn btn-primary" onClick={create}>생성</button>
@@ -436,34 +478,110 @@ function AiSummary({ raw }) {
 // ─── CODE REVIEW ────────────────────────────────────────────────────────────
 const PLACEHOLDER = `// 여기에 리뷰받을 코드를 붙여넣으세요`;
 
-function fbReview() {
-  return { score: 42, summary: '심각한 보안 취약점과 런타임 에러가 발견되었습니다.', issues: [{ severity: 'critical', line: 2, title: 'SQL 인젝션 취약점', desc: '문자열 연결로 쿼리를 구성하면 SQL 인젝션에 취약합니다.', fix: 'db.query("SELECT * FROM users WHERE id = ?", [userId]) 사용' }] };
-}
+const LANG_LABEL = { javascript: 'JavaScript', typescript: 'TypeScript', python: 'Python', java: 'Java', go: 'Go' };
+const FOCUS_LABEL = { all: '전체', security: '보안 취약점', performance: '성능 최적화', quality: '코드 품질' };
+const fmtDate = (ms) => new Date(ms).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+const scoreColor = (s) => (s >= 80 ? 'var(--green)' : s >= 60 ? 'var(--orange)' : 'var(--red)');
 
 export function CodeReview() {
-  const { toast, addNotif } = useApp();
+  const { user, toast, addNotif } = useApp();
   const [code, setCode] = useState('');
   const [lang, setLang] = useState('javascript');
   const [focus, setFocus] = useState('all');
   const [review, setReview] = useState(null);
+  const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  // ── 리뷰 내역 (Firestore 저장 데이터, Groq 재호출 없음) ──
+  const [history, setHistory] = useState([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLang, setHistoryLang] = useState('all');
+  const [historySearch, setHistorySearch] = useState('');
+  const [viewing, setViewing] = useState(null); // 현재 화면에 표시 중인 저장 리뷰 { id, createdAtMs }
+  const restoredRef = useRef(false);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    return subscribeMyCodeReviews(user.uid,
+      list => { setHistory(list); setHistoryLoaded(true); },
+      err => { console.error('리뷰 내역 구독 에러:', err); setHistoryLoaded(true); toast('리뷰 내역을 불러오지 못했습니다', 'e'); });
+  }, [user?.uid, toast]);
+
+  // 저장된 리뷰를 화면에 표시 (입력 코드 + 분석 결과)
+  const showSaved = (h) => {
+    setCode(h.code || '');
+    if (LANG_LABEL[h.lang]) setLang(h.lang);
+    if (FOCUS_LABEL[h.focus]) setFocus(h.focus);
+    setReview(toReview(h));
+    setError(null);
+    setViewing({ id: h.id, createdAtMs: h.createdAtMs });
+  };
+
+  // 페이지 이동/새로고침 후 다시 들어오면 가장 최근 리뷰를 복원 (한 번만)
+  useEffect(() => {
+    if (restoredRef.current || !historyLoaded) return;
+    restoredRef.current = true;
+    if (history.length && !review && !loading && !code.trim()) showSaved(history[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyLoaded, history]);
+
+  const removeHistory = async (h) => {
+    if (!window.confirm(`${fmtDate(h.createdAtMs)} 리뷰 내역을 삭제할까요?`)) return;
+    try {
+      await deleteCodeReview(h.id);
+      if (viewing?.id === h.id) setViewing(null);
+      toast('리뷰 내역을 삭제했습니다', 'i');
+    } catch (e) {
+      console.error('리뷰 내역 삭제 실패:', e);
+      toast('삭제에 실패했습니다', 'e');
+    }
+  };
+
+  const filteredHistory = history.filter(h => {
+    if (historyLang !== 'all' && h.lang !== historyLang) return false;
+    const q = historySearch.trim().toLowerCase();
+    if (!q) return true;
+    return [h.code, h.summary, ...(h.issues || []).map(i => i.title)].some(t => String(t || '').toLowerCase().includes(q));
+  });
 
   const run = async () => {
     if (!code.trim()) { toast('코드를 입력하세요', 'e'); return; }
-    setLoading(true); setReview(null);
+    if (loading) return;
+    setLoading(true); setReview(null); setError(null); setViewing(null);
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content: `시니어 ${lang} 개발자로서 아래 코드를 리뷰해주세요. 반드시 JSON만 응답하세요(마크다운 없이):\n{"score":85,"summary":"전반적 평가","issues":[{"severity":"critical","line":2,"title":"제목","desc":"설명","fix":"수정방법"}]}\n\n코드:\n\`\`\`${lang}\n${code}\n\`\`\`` }] }) });
-      const d = await res.json();
-      setReview(JSON.parse(d.content?.[0]?.text?.replace(/```json?|```/g, '').trim() || '{}'));
-    } catch { setReview(fbReview()); }
+      // 실제 AI(Groq) 호출 + 응답 형식 검증을 모두 통과한 경우에만 결과 표시
+      const { review: result, meta } = await requestReviewFromBackend({ lang, focus, code }); // 백엔드 → Groq API
+      setReview(result);
+      toast('코드 리뷰 완료', 's');
+      addNotif('ai', 'AI 코드 리뷰 완료');
+      // 분석 성공 시 리뷰 내역에 자동 저장
+      try {
+        const id = await saveCodeReview(user.uid, { code, lang, focus, review: result, model: meta?.model });
+        setViewing({ id, createdAtMs: Date.now() });
+      } catch (e) {
+        console.error('리뷰 내역 저장 실패:', e);
+        toast('리뷰는 완료됐지만 내역 저장에 실패했습니다 (Firestore 보안 규칙 확인)', 'e');
+      }
+    } catch (e) {
+      console.error('AI 코드 리뷰 실패:', e);
+      const msg = reviewErrorMessage(e);
+      setError({ msg, detail: String(e?.message || '') });
+      toast(msg, 'e');
+    }
     setLoading(false);
-    toast('코드 리뷰 완료', 's');
-    addNotif('ai', 'AI 코드 리뷰 완료');
   };
 
-  const sc = review ? (review.score >= 80 ? 'var(--green)' : review.score >= 60 ? 'var(--orange)' : 'var(--red)') : null;
+  const sc = review ? scoreColor(review.score) : null;
 
   return (
+    <div>
+      {/* 상단: 리뷰 내역 버튼 */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <button className="btn btn-outline btn-sm" onClick={() => setHistoryOpen(true)}>
+          🕘 리뷰 내역{historyLoaded ? ` (${history.length})` : ''}
+        </button>
+      </div>
     <div className="g2" style={{ gap: 20, alignItems: 'start' }}>
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
@@ -488,7 +606,7 @@ export function CodeReview() {
           <label className="fl">코드</label>
           <textarea className="mono" rows={16} value={code} onChange={e => setCode(e.target.value)} placeholder={PLACEHOLDER} />
         </div>
-        <button className="btn btn-primary btn-full" onClick={run}>AI 코드 리뷰 시작</button>
+        <button className="btn btn-primary btn-full" onClick={run} disabled={loading}>AI 코드 리뷰 시작</button>
       </div>
 
       <div>
@@ -508,6 +626,11 @@ export function CodeReview() {
                 <div>
                   <div className="ai-tag" style={{ marginBottom: 6 }}>✦ AI 분석 결과</div>
                   <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>{review.summary}</div>
+                  {viewing && (
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+                      💾 저장된 리뷰 · {fmtDate(viewing.createdAtMs)} · {LANG_LABEL[lang]} · {FOCUS_LABEL[focus]}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -515,7 +638,7 @@ export function CodeReview() {
               <div key={i} className="ri">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                   <span className={`sev-${iss.severity === 'critical' ? 'c' : iss.severity === 'warning' ? 'w' : 'i'}`}>{iss.severity === 'critical' ? '긴급' : iss.severity === 'warning' ? '경고' : '정보'}</span>
-                  <span style={{ fontSize: 11.5, fontFamily: 'var(--mono)', color: 'var(--text3)', background: 'var(--bg)', padding: '1px 7px', borderRadius: 3, border: '1px solid var(--border)' }}>Line {iss.line}</span>
+                  {iss.line != null && <span style={{ fontSize: 11.5, fontFamily: 'var(--mono)', color: 'var(--text3)', background: 'var(--bg)', padding: '1px 7px', borderRadius: 3, border: '1px solid var(--border)' }}>Line {iss.line}</span>}
                   <span style={{ fontSize: 13, fontWeight: 600 }}>{iss.title}</span>
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 5 }}>{iss.desc}</div>
@@ -523,6 +646,13 @@ export function CodeReview() {
               </div>
             ))}
           </>
+        ) : error ? (
+          <div className="card" style={{ minHeight: 280, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--red)' }}>AI 리뷰에 실패했습니다</div>
+            <div style={{ fontSize: 13, color: 'var(--text2)' }}>{error.msg}</div>
+            {error.detail && <div style={{ fontSize: 11, color: 'var(--text3)', maxWidth: 360, wordBreak: 'break-all' }}>{error.detail.slice(0, 200)}</div>}
+            <button className="btn btn-outline btn-sm" onClick={run}>다시 시도</button>
+          </div>
         ) : (
           <div className="card" style={{ minHeight: 280, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 10 }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>분석 대기 중</div>
@@ -530,6 +660,49 @@ export function CodeReview() {
           </div>
         )}
       </div>
+    </div>
+
+      {/* 리뷰 내역 모달 */}
+      <Modal open={historyOpen} onClose={() => setHistoryOpen(false)}>
+        <div className="modal-title">리뷰 내역</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <select style={{ width: 140 }} value={historyLang} onChange={e => setHistoryLang(e.target.value)}>
+            <option value="all">전체 언어</option>
+            {Object.entries(LANG_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <input className="fi" style={{ flex: 1 }} placeholder="코드, 요약, 지적 내용 검색..." value={historySearch} onChange={e => setHistorySearch(e.target.value)} />
+        </div>
+        <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {!historyLoaded ? (
+            <div style={{ fontSize: 13, color: 'var(--text3)', textAlign: 'center', padding: '24px 0' }}>불러오는 중...</div>
+          ) : filteredHistory.length === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--text3)', textAlign: 'center', padding: '24px 0' }}>
+              {history.length === 0 ? '저장된 리뷰 내역이 없습니다' : '조건에 맞는 리뷰 내역이 없습니다'}
+            </div>
+          ) : filteredHistory.map(h => (
+            <div key={h.id} className="issue-row" style={{ cursor: 'pointer', margin: 0, background: viewing?.id === h.id ? 'var(--accent-light)' : undefined }}
+              onClick={() => { showSaved(h); setHistoryOpen(false); }}>
+              <div style={{ fontSize: 20, fontWeight: 800, color: scoreColor(h.score), minWidth: 36, textAlign: 'center' }}>{h.score}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="ir-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.summary}</div>
+                <div className="ir-meta">
+                  <span className="badge b-progress">{LANG_LABEL[h.lang] || h.lang}</span>
+                  <span>{FOCUS_LABEL[h.focus] || h.focus}</span>
+                  <span>지적 {(h.issues || []).length}건</span>
+                  <span>{fmtDate(h.createdAtMs)}</span>
+                </div>
+                <div style={{ fontSize: 11.5, fontFamily: 'var(--mono)', color: 'var(--text3)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {(h.code || '').split('\n').find(l => l.trim()) || ''}
+                </div>
+              </div>
+              <button className="btn btn-danger btn-xs" onClick={e => { e.stopPropagation(); removeHistory(h); }}>삭제</button>
+            </div>
+          ))}
+        </div>
+        <div className="modal-ft">
+          <button className="btn btn-outline" onClick={() => setHistoryOpen(false)}>닫기</button>
+        </div>
+      </Modal>
     </div>
   );
 }

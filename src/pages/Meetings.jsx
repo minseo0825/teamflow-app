@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import Modal from '../components/Modal';
+import { InviteMembersField, InviteStatusBadge, RejectedInvites } from '../components/MemberPicker';
+import { MyInviteBar, LeaveButton, ReinviteButton } from '../components/InviteActions';
 
 function NewMeetingModal({ onClose, projects }) {
   const { user, createMeeting, toast } = useApp();
@@ -12,6 +14,7 @@ function NewMeetingModal({ onClose, projects }) {
     content: '',
     summary: '',
   });
+  const [invitees, setInvitees] = useState([]);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
   const submit = async () => {
@@ -20,7 +23,7 @@ function NewMeetingModal({ onClose, projects }) {
     await createMeeting({
       ...f,
       attendees: f.attendees.split(',').map(a => a.trim()).filter(Boolean),
-    });
+    }, invitees);
     onClose();
   };
 
@@ -55,6 +58,7 @@ function NewMeetingModal({ onClose, projects }) {
         <label className="fl">요약 (선택)</label>
         <textarea rows={2} value={f.summary} onChange={e => set('summary', e.target.value)} placeholder="회의 요약을 입력하세요" />
       </div>
+      <InviteMembersField selected={invitees} onChange={setInvitees} />
       <div className="modal-ft">
         <button className="btn btn-outline" onClick={onClose}>취소</button>
         <button className="btn btn-primary" onClick={submit}>등록</button>
@@ -64,8 +68,15 @@ function NewMeetingModal({ onClose, projects }) {
 }
 
 function MeetingDetailModal({ meeting, onClose, projects }) {
-  const { updateMeeting, deleteMeeting, toast } = useApp();
+  const { updateMeeting, deleteMeeting, toast, user, meetings } = useApp();
   const [editing, setEditing] = useState(false);
+  // 초대 수락/거절 상태는 실시간 데이터 기준으로 표시
+  const live = meetings.find(m => m.id === meeting.id) || meeting;
+  const invitedList = (live.attendeeUids || [])
+    .filter(uid => live.inviteStatus?.[uid])
+    .map(uid => ({ uid, ...live.inviteStatus[uid] }));
+  // 기존 회의록(createdBy만 있음) 포함, 생성자만 수정/삭제
+  const isOwner = meeting.createdBy === user?.uid;
   const [form, setForm] = useState({ ...meeting, attendees: meeting.attendees?.join(', ') || '' });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
@@ -109,6 +120,7 @@ function MeetingDetailModal({ meeting, onClose, projects }) {
         </>
       ) : (
         <>
+          <MyInviteBar type="meeting" item={live} onRejected={onClose} />
           <div className="modal-title">{meeting.title}</div>
           <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
             <div>
@@ -122,6 +134,28 @@ function MeetingDetailModal({ meeting, onClose, projects }) {
                 ))}
               </div>
             </div>
+            {invitedList.length > 0 && (
+              <div>
+                <div className="dl">초대된 참여자</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+                  {invitedList.map(p => (
+                    <div key={p.uid} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <div className="av av-sm">{p.name?.[0]}</div>
+                      <span style={{ fontSize: 12 }}>{p.name}</span>
+                      <InviteStatusBadge status={p.status} />
+                    </div>
+                  ))}
+                </div>
+                <RejectedInvites inviteStatus={live.inviteStatus} />
+              </div>
+            )}
+            {isOwner && (
+              <div>
+                {invitedList.length === 0 && <div className="dl">초대된 참여자</div>}
+                <ReinviteButton type="meeting" item={live} />
+                {invitedList.length === 0 && <RejectedInvites inviteStatus={live.inviteStatus} />}
+              </div>
+            )}
           </div>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>회의 내용</div>
           <div style={{ fontSize: 13.5, color: 'var(--text2)', lineHeight: 1.8, background: 'var(--bg)', padding: '13px 15px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', marginBottom: 12, whiteSpace: 'pre-wrap' }}>
@@ -136,8 +170,9 @@ function MeetingDetailModal({ meeting, onClose, projects }) {
             </>
           )}
           <div className="modal-ft">
-            <button className="btn btn-danger btn-sm" onClick={async () => { await deleteMeeting(meeting.id); onClose(); }}>삭제</button>
-            <button className="btn btn-outline" onClick={() => setEditing(true)}>수정</button>
+            {isOwner && <button className="btn btn-danger btn-sm" onClick={async () => { await deleteMeeting(meeting.id); onClose(); }}>삭제</button>}
+            {isOwner && <button className="btn btn-outline" onClick={() => setEditing(true)}>수정</button>}
+            <LeaveButton type="meeting" item={live} onLeft={onClose} />
             <button className="btn btn-outline" onClick={onClose}>닫기</button>
           </div>
         </>

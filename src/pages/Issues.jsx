@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import Modal from '../components/Modal';
+import { InviteStatusBadge, RejectedInvites } from '../components/MemberPicker';
+import { MyInviteBar, LeaveButton } from '../components/InviteActions';
 import { DndContext, closestCorners, PointerSensor, useSensor, useSensors, useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -46,7 +48,7 @@ function DroppableColumn({ id, children }) {
 }
 
 function IssueDetailModal({ issue, onClose, onUserClick }) {
-  const { user, toast, updateIssue, deleteIssue, getAllUsers } = useApp();
+  const { user, toast, updateIssue, deleteIssue, getAllUsers, inviteToItem, issues } = useApp();
   const [participantDetails, setParticipantDetails] = React.useState([]);
   const [showAddParticipant, setShowAddParticipant] = React.useState(false);
   const [allUsers, setAllUsers] = React.useState([]);
@@ -66,13 +68,23 @@ function IssueDetailModal({ issue, onClose, onUserClick }) {
     }
   }, [localIssue.participantUids, getAllUsers, allUsers.length]);
 
+  // 참여자 추가 → 바로 등록 + 초대장 발송 (상대가 거절하면 제외됨)
   const addParticipant = async (member) => {
     if (localIssue.participantUids?.includes(member.uid)) return;
-    const newUids = [...(localIssue.participantUids || []), member.uid];
-    await updateIssue(issue.id, 'participantUids', newUids);
-    setLocalIssue(prev => ({ ...prev, participantUids: newUids }));
-    toast(`${member.name}님을 참여자로 추가했습니다`, 's');
+    const ok = await inviteToItem('issue', issue.id, localIssue.title, member);
+    if (!ok) return;
+    setLocalIssue(prev => ({
+      ...prev,
+      participantUids: [...(prev.participantUids || []), member.uid],
+      inviteStatus: { ...(prev.inviteStatus || {}), [member.uid]: { status: 'pending', name: member.name } },
+    }));
   };
+
+  // 상대방의 수락/거절을 실시간으로 반영
+  React.useEffect(() => {
+    const live = issues.find(i => i.id === issue.id);
+    if (live) setLocalIssue(prev => ({ ...prev, participantUids: live.participantUids, inviteStatus: live.inviteStatus }));
+  }, [issues, issue.id]);
 
   const removeParticipant = async (uid) => {
     if (!window.confirm('이 참여자를 제거하시겠습니까?')) return;
@@ -100,6 +112,7 @@ function IssueDetailModal({ issue, onClose, onUserClick }) {
 
   return (
     <>
+      <MyInviteBar type="issue" item={localIssue} onRejected={onClose} />
       <div style={{ fontSize: 11.5, color: 'var(--text3)', fontWeight: 500, marginBottom: 5 }}>#{localIssue.id?.slice(-6)}</div>
       <div className="modal-title">{localIssue.title}</div>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -168,6 +181,7 @@ function IssueDetailModal({ issue, onClose, onUserClick }) {
                 </div>
               )}
               <span style={{ cursor: 'pointer' }} onClick={() => onUserClick && onUserClick(p.uid)}>{p.name}</span>
+              <InviteStatusBadge status={localIssue.inviteStatus?.[p.uid]?.status} />
               <button
                 type="button"
                 onClick={() => removeParticipant(p.uid)}
@@ -187,6 +201,8 @@ function IssueDetailModal({ issue, onClose, onUserClick }) {
             </div>
           ))}
         </div>
+
+        <RejectedInvites inviteStatus={localIssue.inviteStatus} />
 
         {/* 참여자 추가 모달 */}
         {showAddParticipant && (
@@ -293,15 +309,20 @@ function IssueDetailModal({ issue, onClose, onUserClick }) {
         <button className="btn btn-primary btn-sm" style={{ alignSelf: 'flex-end' }} onClick={addComment}>등록</button>
       </div>
       <div className="modal-ft">
-        <button className="btn btn-danger btn-sm" onClick={async () => { await deleteIssue(issue.id); onClose(); }}>이슈 삭제</button>
+        {localIssue.createdBy === user?.uid && (
+          <button className="btn btn-danger btn-sm" onClick={async () => { await deleteIssue(issue.id); onClose(); }}>이슈 삭제</button>
+        )}
+        <LeaveButton type="issue" item={localIssue} onLeft={onClose} />
         <button className="btn btn-outline" onClick={onClose}>닫기</button>
       </div>
     </>
   );
 }
 
-function NewIssueModal({ onClose, projects, defaultStatus = 'todo' }) {
-  const { user, createIssue, getAllUsers, toast } = useApp();
+// 이슈 관리의 두 '+ 새 이슈' 버튼(상단 헤더 / 목록·칸반 옆)이 공통으로 사용하는 입력 화면
+export function NewIssueModal({ onClose, projects: projectsProp, defaultStatus = 'todo' }) {
+  const { user, createIssue, getAllUsers, toast, projects: ctxProjects } = useApp();
+  const projects = projectsProp || ctxProjects;
   const [f, setF] = useState({
     pid: projects.length > 0 ? projects[0].id : '', title: '', desc: '',
     priority: 'medium', status: defaultStatus,
@@ -345,7 +366,7 @@ function NewIssueModal({ onClose, projects, defaultStatus = 'todo' }) {
       tags: f.tags.split(',').map(t => t.trim()).filter(Boolean),
       comments: [],
       participantUids: participants.map(p => p.uid),
-    });
+    }, participants.filter(p => p.uid !== user.uid)); // 생성자 외 참여자에게 초대장 발송
     onClose();
   };
 
@@ -544,7 +565,7 @@ function NewIssueModal({ onClose, projects, defaultStatus = 'todo' }) {
 }
 
 export default function Issues({ filter = { status: 'all', priority: 'all', project: 'all', search: '' }, onUserClick }) {
-  const { issues, projects, updateIssue, deleteIssue } = useApp();
+  const { user, issues, projects, updateIssue, deleteIssue } = useApp();
   const [localFilter, setLocalFilter] = useState(filter);
   const [view, setView] = useState('list');
   const [modal, setModal] = useState(null);
@@ -705,7 +726,9 @@ export default function Issues({ filter = { status: 'all', priority: 'all', proj
                     <option value="review">리뷰중</option>
                     <option value="done">완료</option>
                   </select>
-                  <button className="btn btn-danger btn-xs" onClick={() => deleteIssue(i.id)}>삭제</button>
+                  {i.createdBy === user?.uid && (
+                    <button className="btn btn-danger btn-xs" onClick={() => deleteIssue(i.id)}>삭제</button>
+                  )}
                 </div>
               </div>
             );
